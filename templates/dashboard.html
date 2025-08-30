@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ad Filter Dashboard</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .card-hover {
+            transition: all 0.3s ease;
+        }
+        .card-hover:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+        .pulse-animation {
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        .status-online { background-color: #10b981; }
+        .status-offline { background-color: #ef4444; }
+        .status-warning { background-color: #f59e0b; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <!-- Navigation -->
+    <nav class="gradient-bg shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <i class="fas fa-shield-alt text-white text-2xl mr-3"></i>
+                    <h1 class="text-white text-xl font-bold">Ad Filter Dashboard</h1>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <div class="text-white">
+                        <span class="status-indicator status-online"></span>
+                        <span id="connection-status">Connected</span>
+                    </div>
+                    <button id="logout-btn" class="text-white hover:text-gray-200 transition-colors">
+                        <i class="fas fa-sign-out-alt"></i> Logout
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Login Modal -->
+    <div id="login-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <div class="mt-3 text-center">
+                <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-blue-100">
+                    <i class="fas fa-lock text-blue-600"></i>
+                </div>
+                <h3 class="text-lg font-medium text-gray-900 mt-4">Admin Login</h3>
+                <div class="mt-4">
+                    <input type="text" id="username" placeholder="Username" 
+                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 mb-3">
+                    <input type="password" id="password" placeholder="Password" 
+                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4">
+                    <button id="login-btn" 
+                            class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition-colors">
+                        Login
+                    </button>
+                </div>
+                <div id="login-error" class="text-red-500 text-sm mt-2 hidden"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div id="main-content" class="hidden">
+        <!-- Stats Cards -->
+        <div class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                <!-- Total Queries -->
+                <div class="bg-white overflow-hidden shadow rounded-lg card-hover">
+                    <div class="p-5">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <i class="fas fa-search text-blue-600 text-2xl"></i>
+                            </div>
+                            <div class="ml-5 w-0 flex-1">
+                                <dl>
+                                    <dt class="text-sm font-medium text-gray-500 truncate">Total Queries Today</dt>
+                                    <dd class="text-lg font-medium text-gray-900" id="total-queries">Loading...</dd>
+                                </dl>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Blocked Ads -->
+                <div class="bg-white overflow-hidden shadow rounded-lg card-hover">
+                    <div class="p-5">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <i class="fas fa-ban text-red-600 text-2xl"></i>
+                            </div>
+                            <div class="ml-5 w-0 flex-1">
+                                <dl>
+                                    <dt class="text-sm font-medium text-gray-500 truncate">Ads Blocked Today</dt>
+                                    <dd class="text-lg font-medium text-gray-900" id="blocked-ads">Loading...</dd>
+                                </dl>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Block Percentage -->
+                <div class="bg-white overflow-hidden shadow rounded-lg card-hover">
+                    <div class="p-5">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <i class="fas fa-percentage text-green-600 text-2xl"></i>
+                            </div>
+                            <div class="ml-5 w-0 flex-1">
+                                <dl>
+                                    <dt class="text-sm font-medium text-gray-500 truncate">Block Rate</dt>
+                                    <dd class="text-lg font-medium text-gray-900" id="block-rate">Loading...</dd>
+                                </dl>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ML Detections -->
+                <div class="bg-white overflow-hidden shadow rounded-lg card-hover">
+                    <div class="p-5">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <i class="fas fa-brain text-purple-600 text-2xl"></i>
+                            </div>
+                            <div class="ml-5 w-0 flex-1">
+                                <dl>
+                                    <dt class="text-sm font-medium text-gray-500 truncate">ML Detections</dt>
+                                    <dd class="text-lg font-medium text-gray-900" id="ml-detections">Loading...</dd>
+                                </dl>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts and Controls -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                <!-- Query Activity Chart -->
+                <div class="bg-white overflow-hidden shadow rounded-lg">
+                    <div class="px-4 py-5 sm:p-6">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">
+                            <i class="fas fa-chart-line mr-2"></i>Query Activity
+                        </h3>
+                        <canvas id="activity-chart" width="400" height="200"></canvas>
+                    </div>
+                </div>
+
+                <!-- Manual Block Control -->
+                <div class="bg-white overflow-hidden shadow rounded-lg">
+                    <div class="px-4 py-5 sm:p-6">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">
+                            <i class="fas fa-plus-circle mr-2"></i>Manual Block Control
+                        </h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Domain to Block</label>
+                                <input type="text" id="block-domain" placeholder="e.g., ads.example.com"
+                                       class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                            </div>
+                            <button id="add-block-btn" 
+                                    class="w-full bg-red-600 text-white py-2 px-4 rounded-md hover:bg-red-700 transition-colors">
+                                <i class="fas fa-ban mr-2"></i>Add to Blocklist
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Queries Table -->
+            <div class="bg-white shadow overflow-hidden sm:rounded-md">
+                <div class="px-4 py-5 sm:px-6 flex justify-between items-center">
+                    <div>
+                        <h3 class="text-lg leading-6 font-medium text-gray-900">Recent Queries</h3>
+                        <p class="mt-1 max-w-2xl text-sm text-gray-500">Latest DNS queries and ML analysis results</p>
+                    </div>
+                    <button id="refresh-queries" class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors">
+                        <i class="fas fa-sync-alt mr-2"></i>Refresh
+                    </button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Domain</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Timestamp</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ML Score</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="queries-table" class="bg-white divide-y divide-gray-200">
+                            <!-- Dynamic content -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="notification" class="fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-md shadow-lg transform translate-x-full transition-transform duration-300 z-50">
+        <div class="flex items-center">
+            <i class="fas fa-check-circle mr-2"></i>
+            <span id="notification-text">Success!</span>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let authToken = localStorage.getItem('authToken');
+        let activityChart = null;
+
+        // DOM elements
+        const loginModal = document.getElementById('login-modal');
+        const mainContent = document.getElementById('main-content');
+        const loginBtn = document.getElementById('login-btn');
+        const logoutBtn = document.getElementById('logout-btn');
+        const usernameInput = document.getElementById('username');
+        const passwordInput = document.getElementById('password');
+        const loginError = document.getElementById('login-error');
+
+        // Initialize app
+        document.addEventListener('DOMContentLoaded', function() {
+            if (authToken) {
+                showDashboard();
+            } else {
+                showLogin();
+            }
+            
+            setupEventListeners();
+            initializeChart();
+        });
+
+        function setupEventListeners() {
+            loginBtn.addEventListener('click', handleLogin);
+            logoutBtn.addEventListener('click', handleLogout);
+            document.getElementById('add-block-btn').addEventListener('click', handleAddBlock);
+            document.getElementById('refresh-queries').addEventListener('click', loadRecentQueries);
+            
+            // Enter key for login
+            passwordInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    handleLogin();
+                }
+            });
+        }
+
+        async function handleLogin() {
+            const username = usernameInput.value;
+            const password = passwordInput.value;
+            
+            if (!username || !password) {
+                showError('Please enter both username and password');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    authToken = data.access_token;
+                    localStorage.setItem('authToken', authToken);
+                    showDashboard();
+                    hideError();
+                } else {
+                    showError('Invalid credentials');
+                }
+            } catch (error) {
+                showError('Login failed. Please try again.');
+            }
+        }
+
+        function handleLogout() {
+            authToken = null;
+            localStorage.removeItem('authToken');
+            showLogin();
+        }
+
+        function showLogin() {
+            loginModal.classList.remove('hidden');
+            mainContent.classList.add('hidden');
+        }
+
+        function showDashboard() {
+            loginModal.classList.add('hidden');
+            mainContent.classList.remove('hidden');
+            loadDashboardData();
+            
+            // Auto-refresh every 30 seconds
+            setInterval(loadDashboardData, 30000);
+        }
+
+        function showError(message) {
+            loginError.textContent = message;
+            loginError.classList.remove('hidden');
+        }
+
+        function hideError() {
+            loginError.classList.add('hidden');
+        }
+
+        async function loadDashboardData() {
+            try {
+                // Load stats
+                const statsResponse = await fetch('/api/stats');
+                if (statsResponse.ok) {
+                    const stats = await statsResponse.json();
+                    updateStats(stats);
+                }
+
+                // Load recent queries
+                loadRecentQueries();
+                
+                // Update connection status
+                updateConnectionStatus(true);
+            } catch (error) {
+                console.error('Failed to load dashboard data:', error);
+                updateConnectionStatus(false);
+            }
+        }
+
+        function updateStats(stats) {
+            const pihole = stats.pihole || {};
+            const ml = stats.ml_stats || {};
+
+            document.getElementById('total-queries').textContent = 
+                (pihole.dns_queries_today || ml.queries_today || 0).toLocaleString();
+            document.getElementById('blocked-ads').textContent = 
+                (pihole.ads_blocked_today || ml.blocked_today || 0).toLocaleString();
+            document.getElementById('block-rate').textContent = 
+                `${(pihole.ads_percentage_today || ml.block_rate || 0).toFixed(1)}%`;
+            document.getElementById('ml-detections').textContent = 
+                (ml.blocked_today || 0).toLocaleString();
+        }
+
+        async function loadRecentQueries() {
+            try {
+                const response = await fetch('/api/recent-queries');
+                if (response.ok) {
+                    const data = await response.json();
+                    updateQueriesTable(data.queries || []);
+                }
+            } catch (error) {
+                console.error('Failed to load recent queries:', error);
+            }
+        }
+
+        function updateQueriesTable(queries) {
+            const tbody = document.getElementById('queries-table');
+            tbody.innerHTML = '';
+
+            queries.forEach(query => {
+                const row = document.createElement('tr');
+                row.className = 'hover:bg-gray-50';
+                
+                const statusClass = query.status === 'blocked' ? 'text-red-600' : 'text-green-600';
+                const statusIcon = query.status === 'blocked' ? 'fa-ban' : 'fa-check';
+                
+                row.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${query.domain}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${new Date(query.timestamp).toLocaleString()}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm ${statusClass}">
+                        <i class="fas ${statusIcon} mr-1"></i>${query.status}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        ${query.ml_score ? (query.ml_score * 100).toFixed(1) + '%' : 'N/A'}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        ${query.status === 'allowed' && query.ml_score > 0.5 ? 
+                            `<button onclick="blockDomain('${query.domain}')" class="text-red-600 hover:text-red-900">Block</button>` : 
+                            '-'}
+                    </td>
+                `;
+                
+                tbody.appendChild(row);
+            });
+        }
+
+        async function handleAddBlock() {
+            const domain = document.getElementById('block-domain').value.trim();
+            if (!domain) {
+                showNotification('Please enter a domain', 'error');
+                return;
+            }
+
+            await blockDomain(domain);
+            document.getElementById('block-domain').value = '';
+        }
+
+        async function blockDomain(domain) {
+            try {
+                const response = await fetch('/api/blocklist', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ domain, action: 'add' })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    showNotification(data.message, 'success');
+                    loadRecentQueries();
+                } else {
+                    showNotification('Failed to block domain', 'error');
+                }
+            } catch (error) {
+                showNotification('Error blocking domain', 'error');
+            }
+        }
+
+        function updateConnectionStatus(connected) {
+            const statusElement = document.getElementById('connection-status');
+            const indicator = statusElement.previousElementSibling;
+            
+            if (connected) {
+                statusElement.textContent = 'Connected';
+                indicator.className = 'status-indicator status-online';
+            } else {
+                statusElement.textContent = 'Disconnected';
+                indicator.className = 'status-indicator status-offline';
+            }
+        }
+
+        function showNotification(message, type = 'success') {
+            const notification = document.getElementById('notification');
+            const notificationText = document.getElementById('notification-text');
+            
+            notificationText.textContent = message;
+            notification.className = `fixed top-4 right-4 px-6 py-3 rounded-md shadow-lg transform transition-transform duration-300 z-50 ${
+                type === 'success' ? 'bg-green-500' : 'bg-red-500'
+            } text-white`;
+            
+            // Show notification
+            notification.style.transform = 'translateX(0)';
+            
+            // Hide after 3 seconds
+            setTimeout(() => {
+                notification.style.transform = 'translateX(100%)';
+            }, 3000);
+        }
+
+        function initializeChart() {
+            const ctx = document.getElementById('activity-chart').getContext('2d');
+            activityChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Queries',
+                        data: [],
+                        borderColor: 'rgb(59, 130, 246)',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        tension: 0.4
+                    }, {
+                        label: 'Blocked',
+                        data: [],
+                        borderColor: 'rgb(239, 68, 68)',
+                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
+
