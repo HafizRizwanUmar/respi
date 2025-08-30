@@ -94,6 +94,86 @@ class PiHoleBridge:
         conn.close()
         logger.info("Bridge database initialized")
 
+    def process_queries(self):
+        """Check Pi-hole queries, send to ML API, and update local DB."""
+        logger.info("Processing queries...")
+
+        if not Path(PIHOLE_FTL_DB).exists():
+            logger.info("Pi-hole DB not found, skipping query processing")
+            return
+
+        try:
+            conn = sqlite3.connect(PIHOLE_FTL_DB)
+            cursor = conn.cursor()
+            timestamp_threshold = int(self.last_check_time.timestamp())
+
+            cursor.execute('''
+                SELECT domain, timestamp, status, client
+                FROM queries
+                WHERE timestamp > ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            ''', (timestamp_threshold, BATCH_SIZE))
+
+            domains = [row[0] for row in cursor.fetchall()]
+            conn.close()
+
+            unique_domains = list(set(domains))
+            logger.info(f"Found {len(unique_domains)} new domains to analyze")
+
+            if not unique_domains:
+                return
+
+            # Call ML API
+            try:
+                response = requests.post(
+                    ML_API_URL,
+                    json={"domains": unique_domains},
+                    timeout=15
+                )
+                response.raise_for_status()
+                result = response.json()
+                logger.info(f"ML API result: {result}")
+            except Exception as e:
+                logger.error(f"ML API request failed: {e}")
+
+        except Exception as e:
+            logger.error(f"process_queries failed: {e}")
+
+        self.last_check_time = datetime.now()
+
+    def cleanup_old_data(self):
+        """Clean up old records in local bridge DB."""
+        logger.info("Cleaning up old data...")
+        try:
+            conn = sqlite3.connect(BRIDGE_DB_PATH)
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                DELETE FROM processed_domains 
+                WHERE last_checked < datetime('now', '-30 days')
+            ''')
+
+            cursor.execute('''
+                DELETE FROM ml_suggestions 
+                WHERE timestamp < datetime('now', '-7 days')
+            ''')
+
+            conn.commit()
+            conn.close()
+            logger.info("Old data cleaned successfully")
+        except Exception as e:
+            logger.error(f"cleanup_old_data failed: {e}")
+
+    def get_stats(self):
+        """Return DB stats for health check."""
+        conn = sqlite3.connect(BRIDGE_DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM processed_domains")
+        total = cursor.fetchone()[0]
+        conn.close()
+        return {"total_domains_processed": total}
+
     def run_health_check(self):
         """Perform health check and report status."""
         logger.info("Performing health check")
