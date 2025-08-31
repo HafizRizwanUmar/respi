@@ -1,8 +1,3 @@
-"""
-Enhanced FastAPI Ad Filtering System
-Provides ML-based ad detection, Pi-hole integration, and admin dashboard
-"""
-
 import os
 import logging
 import asyncio
@@ -21,7 +16,6 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import requests
 import pandas as pd
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -42,11 +36,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
-PIHOLE_URL = os.getenv("PIHOLE_URL", "http://192.168.1.100/admin/api.php")
-PIHOLE_TOKEN = os.getenv("PIHOLE_TOKEN", "")
 REQUEST_TIMEOUT = 10
 MODEL_PATH = "models"
-DATABASE_PATH = "data/ad_filter.db"
+DATABASE_PATH = os.getenv("DATABASE_PATH", "data/ad_filter.db")  # Use env for Azure
+
+# Stored synced stats (global for simplicity; use DB/Redis in prod)
+pihole_stats: Dict = {}
+ml_stats: Dict = {}
 
 # Create directories
 Path(MODEL_PATH).mkdir(exist_ok=True)
@@ -93,13 +89,16 @@ class BlocklistRequest(BaseModel):
     domain: str
     action: str  # "add" or "remove"
 
+class QueryLog(BaseModel):
+    queries: List[Dict]
+
 # Database initialization
 def init_database():
     """Initialize SQLite database for storing logs and settings."""
     conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
-    
-    # Create tables
+
+    # Create tables (added client_ip)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS query_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,7 +110,7 @@ def init_database():
             ml_score REAL
         )
     ''')
-    
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS blocked_domains (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,7 +120,7 @@ def init_database():
             source TEXT DEFAULT 'manual'
         )
     ''')
-    
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -131,7 +130,7 @@ def init_database():
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS api_keys (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,8 +141,19 @@ def init_database():
             is_active BOOLEAN DEFAULT 1
         )
     ''')
-    
-    # Create default admin user if not exists
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ml_suggestions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            domain TEXT NOT NULL,
+            ml_score REAL,
+            suggested_action TEXT,
+            applied INTEGER DEFAULT 0,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # Create default admin user if not exists (change password in prod)
     cursor.execute('SELECT COUNT(*) FROM users WHERE username = ?', ('admin',))
     if cursor.fetchone()[0] == 0:
         password_hash = bcrypt.hashpw('admin123'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -151,23 +161,22 @@ def init_database():
             'INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)',
             ('admin', password_hash, 'admin')
         )
-    
+
     conn.commit()
     conn.close()
 
-# ML Model class
+# ML Model class (no changes, but train with more data in prod)
 class AdFilterModel:
     def __init__(self):
         self.vectorizer = None
         self.classifier = None
         self.model_loaded = False
         self.load_or_train_model()
-    
+
     def load_or_train_model(self):
-        """Load existing model or train a new one."""
         vectorizer_path = f"{MODEL_PATH}/vectorizer.pkl"
         classifier_path = f"{MODEL_PATH}/classifier.pkl"
-        
+
         if os.path.exists(vectorizer_path) and os.path.exists(classifier_path):
             try:
                 self.vectorizer = joblib.load(vectorizer_path)
@@ -177,62 +186,47 @@ class AdFilterModel:
                 return
             except Exception as e:
                 logger.error(f"Failed to load model: {e}")
-        
+
         # Train new model
         self.train_model()
-    
+
     def train_model(self):
-        """Train the ML model with sample data."""
         logger.info("Training new ML model...")
-        
-        # Sample training data (in production, use real data)
+
         ad_domains = [
             'ads.google.com', 'doubleclick.net', 'googleadservices.com',
             'googlesyndication.com', 'amazon-adsystem.com', 'facebook.com/tr',
             'analytics.google.com', 'googletagmanager.com', 'scorecardresearch.com',
             'outbrain.com', 'taboola.com', 'adsystem.amazon.com'
         ]
-        
         safe_domains = [
             'google.com', 'youtube.com', 'facebook.com', 'twitter.com',
             'github.com', 'stackoverflow.com', 'wikipedia.org', 'reddit.com',
             'amazon.com', 'netflix.com', 'microsoft.com', 'apple.com'
         ]
-        
-        # Create training dataset
+
         domains = ad_domains + safe_domains
         labels = [1] * len(ad_domains) + [0] * len(safe_domains)
-        
-        # Train vectorizer and classifier
+
         self.vectorizer = TfidfVectorizer(analyzer='char', ngram_range=(2, 4), max_features=1000)
         X = self.vectorizer.fit_transform(domains)
-        
+
         self.classifier = RandomForestClassifier(n_estimators=100, random_state=42)
         self.classifier.fit(X, labels)
-        
-        # Save model
+
         joblib.dump(self.vectorizer, f"{MODEL_PATH}/vectorizer.pkl")
         joblib.dump(self.classifier, f"{MODEL_PATH}/classifier.pkl")
-        
+
         self.model_loaded = True
         logger.info("ML model trained and saved successfully")
-    
+
     def predict(self, domains: List[str]) -> Dict[str, float]:
-        """Predict if domains are ads."""
         if not self.model_loaded:
             return {}
-        
         try:
             X = self.vectorizer.transform(domains)
             probabilities = self.classifier.predict_proba(X)
-            
-            results = {}
-            for i, domain in enumerate(domains):
-                # Get probability of being an ad (class 1)
-                ad_probability = probabilities[i][1] if len(probabilities[i]) > 1 else 0.0
-                results[domain] = float(ad_probability)
-            
-            return results
+            return {d: float(prob[1]) for d, prob in zip(domains, probabilities)}
         except Exception as e:
             logger.error(f"Prediction error: {e}")
             return {}
@@ -240,70 +234,6 @@ class AdFilterModel:
 # Initialize components
 init_database()
 ml_model = AdFilterModel()
-
-# Authentication functions
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify password against hash."""
-    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
-
-def authenticate_user(username: str, password: str) -> Optional[Dict]:
-    """Authenticate user credentials."""
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute('SELECT username, password_hash, role FROM users WHERE username = ?', (username,))
-    user = cursor.fetchone()
-    conn.close()
-    
-    if user and verify_password(password, user[1]):
-        return {"username": user[0], "role": user[2]}
-    return None
-
-def create_access_token(data: dict) -> str:
-    """Create a simple access token."""
-    return hashlib.sha256(f"{data['username']}{secrets.token_hex(16)}".encode()).hexdigest()
-
-# Pi-hole integration functions
-async def fetch_pihole_summary() -> Dict:
-    """Fetch Pi-hole summary statistics."""
-    try:
-        response = requests.get(f"{PIHOLE_URL}?summary", timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        data = response.json()
-        logger.info("Fetched Pi-hole summary successfully")
-        return data
-    except requests.RequestException as e:
-        logger.error(f"Failed to fetch Pi-hole summary: {e}")
-        return {}
-
-async def fetch_pihole_query_log(limit: int = 100) -> List[Dict]:
-    """Fetch recent Pi-hole query logs."""
-    try:
-        response = requests.get(
-            f"{PIHOLE_URL}?getQueryLog&limit={limit}&auth={PIHOLE_TOKEN}",
-            timeout=REQUEST_TIMEOUT
-        )
-        response.raise_for_status()
-        data = response.json()
-        logger.info(f"Fetched {limit} query logs")
-        return data.get('data', [])
-    except requests.RequestException as e:
-        logger.error(f"Failed to fetch Pi-hole query log: {e}")
-        return []
-
-async def add_to_pihole_blocklist(domain: str) -> bool:
-    """Add domain to Pi-hole blocklist."""
-    try:
-        response = requests.post(
-            f"{PIHOLE_URL}?list=black&add={domain}&auth={PIHOLE_TOKEN}",
-            timeout=REQUEST_TIMEOUT
-        )
-        response.raise_for_status()
-        logger.info(f"Added {domain} to Pi-hole blocklist")
-        return True
-    except requests.RequestException as e:
-        logger.error(f"Failed to add {domain} to Pi-hole blocklist: {e}")
-        return False
 
 # API Routes
 @app.get("/", response_class=HTMLResponse)
@@ -314,87 +244,132 @@ async def dashboard(request: Request):
 @app.post("/api/login")
 async def login(login_data: LoginRequest):
     """User login endpoint."""
-    user = authenticate_user(login_data.username, login_data.password)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    
-    token = create_access_token(user)
-    return {"access_token": token, "token_type": "bearer", "user": user}
+    conn = sqlite3.connect(DATABASE_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT password_hash FROM users WHERE username = ?', (login_data.username,))
+    row = cursor.fetchone()
+    conn.close()
+    if row and bcrypt.checkpw(login_data.password.encode('utf-8'), row[0].encode('utf-8')):
+        # Create token (simplified; use JWT in prod)
+        token = secrets.token_hex(32)
+        return {"access_token": token, "token_type": "bearer"}
+    raise HTTPException(status_code=401, detail="Invalid credentials")
 
 @app.post("/api/predict", response_model=DomainResponse)
 async def predict_domains(request: DomainRequest):
     """ML prediction endpoint for domain analysis."""
     try:
-        # Get ML predictions
         predictions = ml_model.predict(request.domains)
-        
-        # Determine which domains to block (threshold: 0.7)
-        block_domains = [domain for domain, score in predictions.items() if score > 0.7]
-        
-        # Log predictions to database
+        block_domains = [d for d, score in predictions.items() if score > 0.7]
+
         conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
-        
-        for domain in request.domains:
-            score = predictions.get(domain, 0.0)
+
+        for domain, score in predictions.items():
+            suggested_action = "block" if score > 0.7 else "allow"
             cursor.execute(
-                'INSERT INTO query_logs (domain, query_type, status, ml_score) VALUES (?, ?, ?, ?)',
-                (domain, 'A', 'blocked' if score > 0.7 else 'allowed', score)
+                'INSERT INTO ml_suggestions (domain, ml_score, suggested_action, applied) VALUES (?, ?, ?, ?)',
+                (domain, score, suggested_action, 1 if suggested_action == "block" else 0)
             )
-        
+
         conn.commit()
         conn.close()
-        
-        logger.info(f"Analyzed {len(request.domains)} domains, blocking {len(block_domains)}")
-        
+
+        logger.info(f"Analyzed {len(request.domains)} domains, suggesting block for {len(block_domains)}")
+
         return DomainResponse(
             block_domains=block_domains,
             analysis=predictions
         )
-    
+
     except Exception as e:
         logger.error(f"Prediction error: {e}")
         raise HTTPException(status_code=500, detail="Prediction failed")
 
-@app.get("/api/stats")
-async def get_stats():
-    """Get system statistics."""
+@app.post("/api/log_queries")
+async def log_queries(data: Dict):
+    """Receive and log query logs from bridge."""
+    queries = data.get("queries", [])
     try:
-        # Get Pi-hole stats
-        pihole_stats = await fetch_pihole_summary()
-        
-        # Get database stats
         conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
-        
-        cursor.execute('SELECT COUNT(*) FROM query_logs WHERE timestamp > datetime("now", "-24 hours")')
-        queries_today = cursor.fetchone()[0]
-        
-        cursor.execute('SELECT COUNT(*) FROM query_logs WHERE status = "blocked" AND timestamp > datetime("now", "-24 hours")')
-        blocked_today = cursor.fetchone()[0]
-        
-        cursor.execute('SELECT COUNT(*) FROM blocked_domains')
-        total_blocked_domains = cursor.fetchone()[0]
-        
+        for q in queries:
+            cursor.execute(
+                'INSERT INTO query_logs (domain, timestamp, status, ml_score, client_ip, query_type) VALUES (?, ?, ?, ?, ?, ?)',
+                (q["domain"], q["timestamp"], q["status"], q["ml_score"], q.get("client_ip"), 'A')  # Assume type A
+            )
+        conn.commit()
         conn.close()
-        
+        logger.info(f"Logged {len(queries)} queries from bridge")
+        return {"status": "logged"}
+    except Exception as e:
+        logger.error(f"Log queries error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to log queries")
+
+@app.post("/api/update_stats")
+async def update_stats(data: Dict):
+    """Receive stats update from bridge."""
+    global pihole_stats, ml_stats
+    pihole_stats = data.get("pihole", {})
+    ml_stats = data.get("ml_stats", {})
+    logger.info("Updated stats from bridge")
+    return {"status": "updated"}
+
+@app.get("/api/stats")
+async def get_stats():
+    """Get system statistics (synced from bridge)."""
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        # Queries in the last 24h (from synced logs)
+        cursor.execute('''
+            SELECT COUNT(*) 
+            FROM query_logs 
+            WHERE timestamp > datetime("now", "-24 hours")
+        ''')
+        queries_today = cursor.fetchone()[0]
+
+        # Blocked
+        cursor.execute('''
+            SELECT COUNT(*) 
+            FROM query_logs 
+            WHERE status = "blocked" 
+              AND timestamp > datetime("now", "-24 hours")
+        ''')
+        blocked_today = cursor.fetchone()[0]
+
+        # ML detections (from suggestions)
+        cursor.execute('''
+            SELECT COUNT(*) 
+            FROM ml_suggestions 
+            WHERE applied = 1 
+              AND timestamp > datetime("now", "-24 hours")
+        ''')
+        ml_detections_today = cursor.fetchone()[0]
+
+        conn.close()
+
+        # Override with synced ml_stats if available
+        synced_ml = ml_stats or {
+            "queries_today": queries_today,
+            "blocked_today": blocked_today,
+            "ml_detections": ml_detections_today,
+            "block_rate": (blocked_today / queries_today * 100) if queries_today > 0 else 0
+        }
+
         return {
             "pihole": pihole_stats,
-            "ml_stats": {
-                "queries_today": queries_today,
-                "blocked_today": blocked_today,
-                "total_blocked_domains": total_blocked_domains,
-                "block_rate": (blocked_today / queries_today * 100) if queries_today > 0 else 0
-            }
+            "ml_stats": synced_ml
         }
-    
+
     except Exception as e:
         logger.error(f"Stats error: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch stats")
 
 @app.get("/api/recent-queries")
 async def get_recent_queries(limit: int = 50):
-    """Get recent query logs."""
+    """Get recent query logs (synced from bridge)."""
     try:
         conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
@@ -424,35 +399,25 @@ async def get_recent_queries(limit: int = 50):
 
 @app.post("/api/blocklist")
 async def manage_blocklist(request: BlocklistRequest):
-    """Add or remove domains from blocklist."""
+    """Add or remove domains from manual blocklist (synced to Pi by bridge)."""
     try:
         conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
         
         if request.action == "add":
-            # Add to local database
             cursor.execute(
                 'INSERT OR IGNORE INTO blocked_domains (domain, source) VALUES (?, ?)',
                 (request.domain, 'manual')
             )
-            
-            # Add to Pi-hole
-            success = await add_to_pihole_blocklist(request.domain)
-            
             conn.commit()
             conn.close()
-            
-            if success:
-                return {"message": f"Domain {request.domain} added to blocklist"}
-            else:
-                return {"message": f"Domain {request.domain} added locally but failed to sync with Pi-hole"}
+            return {"message": f"Domain {request.domain} added to manual blocklist (will sync to Pi-hole)"}
         
         elif request.action == "remove":
             cursor.execute('DELETE FROM blocked_domains WHERE domain = ?', (request.domain,))
             conn.commit()
             conn.close()
-            
-            return {"message": f"Domain {request.domain} removed from blocklist"}
+            return {"message": f"Domain {request.domain} removed from manual blocklist (will sync to Pi-hole)"}
         
         else:
             raise HTTPException(status_code=400, detail="Invalid action")
@@ -461,22 +426,35 @@ async def manage_blocklist(request: BlocklistRequest):
         logger.error(f"Blocklist management error: {e}")
         raise HTTPException(status_code=500, detail="Failed to manage blocklist")
 
+@app.get("/api/blocklist")
+async def get_blocklist():
+    """Get manual blocklist for bridge sync."""
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        cursor.execute('SELECT domain FROM blocked_domains')
+        domains = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return {"domains": domains}
+    except Exception as e:
+        logger.error(f"Get blocklist error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch blocklist")
+
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "ml_model_loaded": ml_model.model_loaded,
-        "pihole_connected": bool(await fetch_pihole_summary())
+        "ml_model_loaded": ml_model.model_loaded
     }
 
 if __name__ == "__main__":
+    port = int(os.getenv("API_PORT", 8000))
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
+        port=port,
         reload=True,
         log_level="info"
     )
-

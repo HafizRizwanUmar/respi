@@ -228,280 +228,318 @@
         </div>
     </div>
 
-    <script>
-        // Global variables
-        let authToken = localStorage.getItem('authToken');
-        let activityChart = null;
+<script>
+    // ========================
+    // 🔧 CONFIG
+    // ========================
+    const API_BASE = "https://quranoitratacademy.com/api"; // adjust if hosted elsewhere
 
-        // DOM elements
-        const loginModal = document.getElementById('login-modal');
-        const mainContent = document.getElementById('main-content');
-        const loginBtn = document.getElementById('login-btn');
-        const logoutBtn = document.getElementById('logout-btn');
-        const usernameInput = document.getElementById('username');
-        const passwordInput = document.getElementById('password');
-        const loginError = document.getElementById('login-error');
+    let authToken = localStorage.getItem('authToken');
+    let activityChart = null;
 
-        // Initialize app
-        document.addEventListener('DOMContentLoaded', function() {
-            if (authToken) {
-                showDashboard();
-            } else {
-                showLogin();
-            }
-            
-            setupEventListeners();
-            initializeChart();
-        });
+    // DOM elements
+    const loginModal = document.getElementById('login-modal');
+    const mainContent = document.getElementById('main-content');
+    const loginBtn = document.getElementById('login-btn');
+    const logoutBtn = document.getElementById('logout-btn');
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    const loginError = document.getElementById('login-error');
 
-        function setupEventListeners() {
-            loginBtn.addEventListener('click', handleLogin);
-            logoutBtn.addEventListener('click', handleLogout);
-            document.getElementById('add-block-btn').addEventListener('click', handleAddBlock);
-            document.getElementById('refresh-queries').addEventListener('click', loadRecentQueries);
-            
-            // Enter key for login
-            passwordInput.addEventListener('keypress', function(e) {
-                if (e.key === 'Enter') {
-                    handleLogin();
-                }
-            });
-        }
-
-        async function handleLogin() {
-            const username = usernameInput.value;
-            const password = passwordInput.value;
-            
-            if (!username || !password) {
-                showError('Please enter both username and password');
-                return;
-            }
-
-            try {
-                const response = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ username, password })
-                });
-
-                if (response.ok) {
-                    const data = await response.json();
-                    authToken = data.access_token;
-                    localStorage.setItem('authToken', authToken);
-                    showDashboard();
-                    hideError();
-                } else {
-                    showError('Invalid credentials');
-                }
-            } catch (error) {
-                showError('Login failed. Please try again.');
-            }
-        }
-
-        function handleLogout() {
-            authToken = null;
-            localStorage.removeItem('authToken');
+    // ========================
+    // INIT
+    // ========================
+    document.addEventListener('DOMContentLoaded', function() {
+        if (authToken) {
+            showDashboard();
+        } else {
             showLogin();
         }
+        setupEventListeners();
+        initializeChart();
+    });
 
-        function showLogin() {
-            loginModal.classList.remove('hidden');
-            mainContent.classList.add('hidden');
+    function setupEventListeners() {
+        loginBtn.addEventListener('click', handleLogin);
+        logoutBtn.addEventListener('click', handleLogout);
+        document.getElementById('add-block-btn').addEventListener('click', handleAddBlock);
+        document.getElementById('refresh-queries').addEventListener('click', loadRecentQueries);
+
+        // Enter key for login
+        passwordInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') handleLogin();
+        });
+    }
+
+    // ========================
+    // LOGIN / LOGOUT
+    // ========================
+    async function handleLogin() {
+        const username = usernameInput.value;
+        const password = passwordInput.value;
+
+        if (!username || !password) {
+            showError('Please enter both username and password');
+            return;
         }
 
-        function showDashboard() {
-            loginModal.classList.add('hidden');
-            mainContent.classList.remove('hidden');
-            loadDashboardData();
-            
-            // Auto-refresh every 30 seconds
-            setInterval(loadDashboardData, 30000);
-        }
-
-        function showError(message) {
-            loginError.textContent = message;
-            loginError.classList.remove('hidden');
-        }
-
-        function hideError() {
-            loginError.classList.add('hidden');
-        }
-
-        async function loadDashboardData() {
-            try {
-                // Load stats
-                const statsResponse = await fetch('/api/stats');
-                if (statsResponse.ok) {
-                    const stats = await statsResponse.json();
-                    updateStats(stats);
-                }
-
-                // Load recent queries
-                loadRecentQueries();
-                
-                // Update connection status
-                updateConnectionStatus(true);
-            } catch (error) {
-                console.error('Failed to load dashboard data:', error);
-                updateConnectionStatus(false);
-            }
-        }
-
-        function updateStats(stats) {
-            const pihole = stats.pihole || {};
-            const ml = stats.ml_stats || {};
-
-            document.getElementById('total-queries').textContent = 
-                (pihole.dns_queries_today || ml.queries_today || 0).toLocaleString();
-            document.getElementById('blocked-ads').textContent = 
-                (pihole.ads_blocked_today || ml.blocked_today || 0).toLocaleString();
-            document.getElementById('block-rate').textContent = 
-                `${(pihole.ads_percentage_today || ml.block_rate || 0).toFixed(1)}%`;
-            document.getElementById('ml-detections').textContent = 
-                (ml.blocked_today || 0).toLocaleString();
-        }
-
-        async function loadRecentQueries() {
-            try {
-                const response = await fetch('/api/recent-queries');
-                if (response.ok) {
-                    const data = await response.json();
-                    updateQueriesTable(data.queries || []);
-                }
-            } catch (error) {
-                console.error('Failed to load recent queries:', error);
-            }
-        }
-
-        function updateQueriesTable(queries) {
-            const tbody = document.getElementById('queries-table');
-            tbody.innerHTML = '';
-
-            queries.forEach(query => {
-                const row = document.createElement('tr');
-                row.className = 'hover:bg-gray-50';
-                
-                const statusClass = query.status === 'blocked' ? 'text-red-600' : 'text-green-600';
-                const statusIcon = query.status === 'blocked' ? 'fa-ban' : 'fa-check';
-                
-                row.innerHTML = `
-                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${query.domain}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${new Date(query.timestamp).toLocaleString()}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm ${statusClass}">
-                        <i class="fas ${statusIcon} mr-1"></i>${query.status}
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        ${query.ml_score ? (query.ml_score * 100).toFixed(1) + '%' : 'N/A'}
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        ${query.status === 'allowed' && query.ml_score > 0.5 ? 
-                            `<button onclick="blockDomain('${query.domain}')" class="text-red-600 hover:text-red-900">Block</button>` : 
-                            '-'}
-                    </td>
-                `;
-                
-                tbody.appendChild(row);
+        try {
+            const response = await fetch(`${API_BASE}/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
             });
-        }
 
-        async function handleAddBlock() {
-            const domain = document.getElementById('block-domain').value.trim();
-            if (!domain) {
-                showNotification('Please enter a domain', 'error');
-                return;
-            }
-
-            await blockDomain(domain);
-            document.getElementById('block-domain').value = '';
-        }
-
-        async function blockDomain(domain) {
-            try {
-                const response = await fetch('/api/blocklist', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ domain, action: 'add' })
-                });
-
-                if (response.ok) {
-                    const data = await response.json();
-                    showNotification(data.message, 'success');
-                    loadRecentQueries();
-                } else {
-                    showNotification('Failed to block domain', 'error');
-                }
-            } catch (error) {
-                showNotification('Error blocking domain', 'error');
-            }
-        }
-
-        function updateConnectionStatus(connected) {
-            const statusElement = document.getElementById('connection-status');
-            const indicator = statusElement.previousElementSibling;
-            
-            if (connected) {
-                statusElement.textContent = 'Connected';
-                indicator.className = 'status-indicator status-online';
+            if (response.ok) {
+                const data = await response.json();
+                authToken = data.access_token;
+                localStorage.setItem('authToken', authToken);
+                showDashboard();
+                hideError();
             } else {
-                statusElement.textContent = 'Disconnected';
-                indicator.className = 'status-indicator status-offline';
+                showError('Invalid credentials');
             }
+        } catch (error) {
+            showError('Login failed. Please try again.');
         }
+    }
 
-        function showNotification(message, type = 'success') {
-            const notification = document.getElementById('notification');
-            const notificationText = document.getElementById('notification-text');
-            
-            notificationText.textContent = message;
-            notification.className = `fixed top-4 right-4 px-6 py-3 rounded-md shadow-lg transform transition-transform duration-300 z-50 ${
-                type === 'success' ? 'bg-green-500' : 'bg-red-500'
-            } text-white`;
-            
-            // Show notification
-            notification.style.transform = 'translateX(0)';
-            
-            // Hide after 3 seconds
-            setTimeout(() => {
-                notification.style.transform = 'translateX(100%)';
-            }, 3000);
-        }
+    function handleLogout() {
+        authToken = null;
+        localStorage.removeItem('authToken');
+        showLogin();
+    }
 
-        function initializeChart() {
-            const ctx = document.getElementById('activity-chart').getContext('2d');
-            activityChart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: 'Queries',
-                        data: [],
-                        borderColor: 'rgb(59, 130, 246)',
-                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                        tension: 0.4
-                    }, {
-                        label: 'Blocked',
-                        data: [],
-                        borderColor: 'rgb(239, 68, 68)',
-                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                        tension: 0.4
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: {
-                            beginAtZero: true
-                        }
-                    }
-                }
+    function showLogin() {
+        loginModal.classList.remove('hidden');
+        mainContent.classList.add('hidden');
+    }
+
+    function showDashboard() {
+        loginModal.classList.add('hidden');
+        mainContent.classList.remove('hidden');
+        loadDashboardData();
+
+        // Auto-refresh every 30s
+        setInterval(loadDashboardData, 30000);
+    }
+
+    // ========================
+    // DASHBOARD DATA
+    // ========================
+    async function loadDashboardData() {
+        try {
+            // Load stats
+            const statsResponse = await fetch(`${API_BASE}/stats`, {
+                headers: authHeaders()
             });
+            if (statsResponse.ok) {
+                const stats = await statsResponse.json();
+                updateStats(stats);
+                updateChart(stats);
+            }
+
+            // Load recent queries
+            loadRecentQueries();
+
+            updateConnectionStatus(true);
+        } catch (error) {
+            console.error('Failed to load dashboard data:', error);
+            updateConnectionStatus(false);
         }
-    </script>
+    }
+
+    function updateStats(stats) {
+        const pihole = stats.pihole || {};
+        const ml = stats.ml_stats || {};
+
+        document.getElementById('total-queries').textContent =
+            (pihole.dns_queries_today || ml.queries_today || 0).toLocaleString();
+
+        document.getElementById('blocked-ads').textContent =
+            (pihole.ads_blocked_today || ml.blocked_today || 0).toLocaleString();
+
+        document.getElementById('block-rate').textContent =
+            `${(pihole.ads_percentage_today || ml.block_rate || 0).toFixed(1)}%`;
+
+        document.getElementById('ml-detections').textContent =
+            (ml.ml_detected_today || ml.blocked_today || 0).toLocaleString();
+    }
+
+    // ========================
+    // RECENT QUERIES
+    // ========================
+    async function loadRecentQueries() {
+        try {
+            const response = await fetch(`${API_BASE}/recent-queries`, {
+                headers: authHeaders()
+            });
+            if (response.ok) {
+                const data = await response.json();
+                updateQueriesTable(data.queries || []);
+            }
+        } catch (error) {
+            console.error('Failed to load recent queries:', error);
+        }
+    }
+
+    function updateQueriesTable(queries) {
+        const tbody = document.getElementById('queries-table');
+        tbody.innerHTML = '';
+
+        queries.forEach(query => {
+            const row = document.createElement('tr');
+            row.className = 'hover:bg-gray-50';
+
+            const statusClass = query.status === 'blocked' ? 'text-red-600' : 'text-green-600';
+            const statusIcon = query.status === 'blocked' ? 'fa-ban' : 'fa-check';
+
+            row.innerHTML = `
+                <td class="px-6 py-4 text-sm font-medium text-gray-900">${query.domain}</td>
+                <td class="px-6 py-4 text-sm text-gray-500">${new Date(query.timestamp).toLocaleString()}</td>
+                <td class="px-6 py-4 text-sm ${statusClass}">
+                    <i class="fas ${statusIcon} mr-1"></i>${query.status}
+                </td>
+                <td class="px-6 py-4 text-sm text-gray-500">
+                    ${query.ml_score ? (query.ml_score * 100).toFixed(1) + '%' : 'N/A'}
+                </td>
+                <td class="px-6 py-4 text-sm text-gray-500">
+                    ${query.status === 'allowed' && query.ml_score > 0.5 ?
+                        `<button onclick="blockDomain('${query.domain}')" class="text-red-600 hover:text-red-900">Block</button>` : 
+                        '-'}
+                </td>
+            `;
+
+            tbody.appendChild(row);
+        });
+    }
+
+    // ========================
+    // BLOCKLIST CONTROL
+    // ========================
+    async function handleAddBlock() {
+        const domain = document.getElementById('block-domain').value.trim();
+        if (!domain) {
+            showNotification('Please enter a domain', 'error');
+            return;
+        }
+        await blockDomain(domain);
+        document.getElementById('block-domain').value = '';
+    }
+
+    async function blockDomain(domain) {
+        try {
+            const response = await fetch(`${API_BASE}/blocklist`, {
+                method: 'POST',
+                headers: authHeaders(),
+                body: JSON.stringify({ domain, action: 'add' })
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                showNotification(data.message, 'success');
+                loadRecentQueries();
+            } else {
+                showNotification('Failed to block domain', 'error');
+            }
+        } catch (error) {
+            showNotification('Error blocking domain', 'error');
+        }
+    }
+
+    // ========================
+    // HELPERS
+    // ========================
+    function authHeaders() {
+        return {
+            'Content-Type': 'application/json',
+            ...(authToken && { 'Authorization': `Bearer ${authToken}` })
+        };
+    }
+
+    function updateConnectionStatus(connected) {
+        const statusElement = document.getElementById('connection-status');
+        const indicator = statusElement.previousElementSibling;
+
+        if (connected) {
+            statusElement.textContent = 'Connected';
+            indicator.className = 'status-indicator status-online';
+        } else {
+            statusElement.textContent = 'Disconnected';
+            indicator.className = 'status-indicator status-offline';
+        }
+    }
+
+    function showError(message) {
+        loginError.textContent = message;
+        loginError.classList.remove('hidden');
+    }
+
+    function hideError() {
+        loginError.classList.add('hidden');
+    }
+
+    function showNotification(message, type = 'success') {
+        const notification = document.getElementById('notification');
+        const notificationText = document.getElementById('notification-text');
+
+        notificationText.textContent = message;
+        notification.className = `fixed top-4 right-4 px-6 py-3 rounded-md shadow-lg transform transition-transform duration-300 z-50 ${
+            type === 'success' ? 'bg-green-500' : 'bg-red-500'
+        } text-white`;
+
+        notification.style.transform = 'translateX(0)';
+        setTimeout(() => { notification.style.transform = 'translateX(100%)'; }, 3000);
+    }
+
+    // ========================
+    // CHART
+    // ========================
+    function initializeChart() {
+        const ctx = document.getElementById('activity-chart').getContext('2d');
+        activityChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Queries',
+                    data: [],
+                    borderColor: 'rgb(59, 130, 246)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    tension: 0.4
+                }, {
+                    label: 'Blocked',
+                    data: [],
+                    borderColor: 'rgb(239, 68, 68)',
+                    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: { y: { beginAtZero: true } }
+            }
+        });
+    }
+
+    function updateChart(stats) {
+        const now = new Date().toLocaleTimeString();
+        const ml = stats.ml_stats || {};
+
+        activityChart.data.labels.push(now);
+        activityChart.data.datasets[0].data.push(ml.queries_today || 0);
+        activityChart.data.datasets[1].data.push(ml.blocked_today || 0);
+
+        if (activityChart.data.labels.length > 20) {
+            activityChart.data.labels.shift();
+            activityChart.data.datasets[0].data.shift();
+            activityChart.data.datasets[1].data.shift();
+        }
+
+        activityChart.update();
+    }
+</script>
+
 </body>
 </html>
-
