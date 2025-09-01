@@ -290,7 +290,7 @@ sudo systemctl status pihole-bridge.service
 tail -f /var/log/pihole_bridge.log
 
 # Test ML API connectivity
-curl -X POST "http://your-vps-ip:8000/api/predict" \
+curl -X POST "http://69.62.100.18:8000/api/predict" \
   -H "Content-Type: application/json" \
   -d '{"domains": ["test.com"]}'
 ```
