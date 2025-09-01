@@ -95,7 +95,7 @@ Group=$SERVICE_USER
 WorkingDirectory=$PROJECT_DIR
 Environment="PATH=$VENV_PATH/bin"
 EnvironmentFile=$PROJECT_DIR/.env
-ExecStart=$VENV_PATH/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
+ExecStart=$VENV_PATH/bin/uvicorn main:app --host 0.0.0.0 --port 8081 --workers 4
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -108,9 +108,25 @@ EOF
 # Create nginx configuration
 print_status "Creating Nginx configuration..."
 sudo tee /etc/nginx/sites-available/ad-filter > /dev/null <<'EOF'
+# HTTP server - redirect to HTTPS
 server {
     listen 80;
-    server_name _;  # Replace with your domain or IP
+    server_name api.quranoitratacademy.com;
+
+    # Redirect all HTTP traffic to HTTPS
+    return 301 https://$host$request_uri;
+}
+
+# HTTPS server
+server {
+    listen 443 ssl;
+    server_name api.quranoitratacademy.com;
+
+    # SSL configuration (managed by Certbot)
+    ssl_certificate /etc/letsencrypt/live/api.quranoitratacademy.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.quranoitratacademy.com/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
     # Security headers
     add_header X-Frame-Options "SAMEORIGIN" always;
@@ -119,47 +135,67 @@ server {
     add_header Referrer-Policy "no-referrer-when-downgrade" always;
     add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
 
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_proxied expired no-cache no-store private auth;
+    gzip_types text/plain text/css text/xml text/javascript application/x-javascript application/xml+rss application/json;
+
     # Rate limiting for API endpoints
     location /api/ {
         limit_req zone=api burst=20 nodelay;
-        proxy_pass http://127.0.0.1:8000;
+        proxy_pass http://127.0.0.1:8081;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # Restrict /api/predict to Pi-hole only (update IP as needed)
+    # Restrict /api/predict to Pi-hole network range
     location /api/predict {
-        # allow 192.168.1.100;  # Replace with your Pi-hole IP
-        # deny all;
-        proxy_pass http://127.0.0.1:8000;
+        # Allow Pi-hole IP address (update as needed)
+        allow 192.168.100.18;
+        # Allow common private network ranges for Pi-hole
+        allow 192.168.0.0/16;
+        allow 10.0.0.0/8;
+        allow 172.16.0.0/12;
+        # Allow localhost for testing
+        allow 127.0.0.1;
+        deny all;
+        
+        proxy_pass http://127.0.0.1:8081;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # Dashboard and static files
-    location / {
-        proxy_pass http://127.0.0.1:8000;
+    # Forward requests to Pi-hole via SSH tunnel
+    location /pihole/ {
+        proxy_pass http://127.0.0.1:8888/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         
+        # Handle Pi-hole API v6 specific headers
+        proxy_set_header X-Pi-hole-Authenticate $http_x_pi_hole_authenticate;
+    }
+
+    # Dashboard and static files
+    location / {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
         # WebSocket support for real-time updates
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
     }
-
-    # Gzip compression
-    gzip on;
-    gzip_vary on;
-    gzip_min_length 1024;
-    gzip_proxied expired no-cache no-store private must-revalidate auth;
-    gzip_types text/plain text/css text/xml text/javascript application/x-javascript application/xml+rss application/javascript;
 }
 EOF
 

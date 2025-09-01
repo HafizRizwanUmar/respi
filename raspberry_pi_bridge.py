@@ -22,7 +22,7 @@ load_dotenv()
 # Configuration
 PIHOLE_FTL_DB = "/etc/pihole/pihole-FTL.db"
 PIHOLE_GRAVITY_DB = "/etc/pihole/gravity.db"
-ML_API_URL = os.getenv("ML_API_URL", "https://quranoitratacademy.com/api/predict").rstrip("/")
+ML_API_URL = os.getenv("ML_API_URL", "https://api.quranoitratacademy.com/api/predict").rstrip("/")
 if not ML_API_URL.endswith("/api/predict"):
     ML_API_URL = ML_API_URL + "/api/predict"
 BRIDGE_DB_PATH = "/home/pi/bridge_data.db"
